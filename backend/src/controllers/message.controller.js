@@ -1,16 +1,16 @@
-import Message from "../models/message.js";
+import cloudinary from "../lib/cloudinary.js";
+import { getReceiverSocketId, io } from "../lib/socket.js";
+import Message from "../models/Message.js";
 import User from "../models/User.js";
 
 export const getAllContacts = async (req, res) => {
   try {
     const loggedInUserId = req.user._id;
-    const filteredUsers = await UserActivation.find({
-      _id: { $ne: loggedInUserId },
-    }).select("-password");
+    const filteredUsers = await User.find({ _id: { $ne: loggedInUserId } }).select("-password");
 
     res.status(200).json(filteredUsers);
   } catch (error) {
-    console.log("Error in getAllContacts : ", error.message);
+    console.log("Error in getAllContacts:", error);
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -26,10 +26,11 @@ export const getMessagesByUserId = async (req, res) => {
         { senderId: userToChatId, receiverId: myId },
       ],
     });
+
     res.status(200).json(messages);
   } catch (error) {
-    console.log("Error in getMessages Controller : ", error.message);
-    res.status(500).json({ message: "Server error" });
+    console.log("Error in getMessages controller: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
@@ -43,9 +44,7 @@ export const sendMessage = async (req, res) => {
       return res.status(400).json({ message: "Text or image is required." });
     }
     if (senderId.equals(receiverId)) {
-      return res
-        .status(400)
-        .json({ message: "Cannot send messages to yourself." });
+      return res.status(400).json({ message: "Cannot send messages to yourself." });
     }
     const receiverExists = await User.exists({ _id: receiverId });
     if (!receiverExists) {
@@ -67,34 +66,40 @@ export const sendMessage = async (req, res) => {
 
     await newMessage.save();
 
+    const receiverSocketId = getReceiverSocketId(receiverId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit("newMessage", newMessage);
+    }
+
     res.status(201).json(newMessage);
   } catch (error) {
-    console.log("Error in sendMessages Controller : ", error.message);
-    res.status(500).json({ message: "Internal Server error" });
+    console.log("Error in sendMessage controller: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
 export const getChatPartners = async (req, res) => {
   try {
-    const loggedInUsrId = req.user._id;
+    const loggedInUserId = req.user._id;
     const messages = await Message.find({
-      $or: [{ senderId: loggedInUsrId, receiverId: loggedInUsrId }],
+      $or: [{ senderId: loggedInUserId }, { receiverId: loggedInUserId }],
     });
+
     const chatPartnerIds = [
       ...new Set(
         messages.map((msg) =>
-          msg.senderId.toString() === loggedInUsrId.toString()
+          msg.senderId.toString() === loggedInUserId.toString()
             ? msg.receiverId.toString()
             : msg.senderId.toString()
         )
       ),
     ];
-    const chatPartners = await User.find({
-      _id: { $in: chatPartnerIds },
-    }).select("-password");
+
+    const chatPartners = await User.find({ _id: { $in: chatPartnerIds } }).select("-password");
+
     res.status(200).json(chatPartners);
   } catch (error) {
-    console.log("Error in getChatPartners Controller : ", error.message);
-    res.status(500).json({ message: "Internal Server error" });
+    console.error("Error in getChatPartners: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
   }
 };
